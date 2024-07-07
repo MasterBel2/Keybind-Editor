@@ -518,7 +518,7 @@ local function KeychainDialog()
 
     local dialog = Dialog(
         "Edit Keybind",
-        { actionEntry, keybindEntry }, 
+        { actionEntry, keybindEntry },
         {
             {
                 name = "Okay", 
@@ -663,7 +663,7 @@ local function PresetsDialog()
                                                 refreshPresetsDialog()
                                             else
                                                 Spring.Echo("Not overwriting!")
-                                            end 
+                                            end
                                         end
                                     },
                                     { name = "Cancel", color = MasterFramework:Color(1, 1, 1, 0.7), action = function() end }
@@ -944,7 +944,7 @@ function widget:Update()
     end
 end
 
-function widget:Shutdown() 
+function widget:Shutdown()
     MasterFramework:RemoveElement(key)
     keychainDialog:Hide()
 end
