@@ -15,7 +15,7 @@ end
 ------------------------------------------------------------------------------------------------------------
 
 local MasterFramework
-local requiredFrameworkVersion = 33
+local requiredFrameworkVersion = "Dev"
 local key
 
 ------------------------------------------------------------------------------------------------------------
@@ -23,6 +23,13 @@ local key
 ------------------------------------------------------------------------------------------------------------
 
 local Spring_GetKeyBindings = Spring.GetKeyBindings
+
+local keyboard
+
+local cachedKeybindings = {}
+
+local lastUpdateModFilter = {}
+local modFilter = { alt = false, shift = false, ctrl = false, meta = false }
 
 local keychainDialogKey
 local keychainDialog
@@ -87,9 +94,6 @@ local categories = {
     ["Other"] = {}
 }
 
-local categoryNames = table.mapToArray(categories, function(key, _) return key end)
-table.sort(categoryNames)
-
 for unitDefName, _ in pairs(UnitDefNames) do
     table.insert(categories["Build Unit"], "buildunit_" .. unitDefName)
 end
@@ -102,11 +106,8 @@ for categoryName, commands in pairs(categories) do
     end
 end
 
-local function categoryDisclosureArrayWithElements()
-    return table.imap(table.ifilter(categoryNames, function(_, categoryName) return #categoryElements[categoryName].members > 0 end), function(_, categoryName)
-        return categoryDisclosures[categoryName]
-    end)
-end
+local categoryDisclosureArrayWithElements
+    
 
 ------------------------------------------------------------------------------------------------------------
 -- Interface Templates
@@ -141,40 +142,42 @@ local function Dialog(titleString, contents, options)
                 end
             )
         end),
-        MasterFramework:Dimension(8),
+        MasterFramework:AutoScalingDimension(8),
         0
     )
 
-    local editableContents = MasterFramework:VerticalStack(contents, MasterFramework:Dimension(8), 0)
+    local editableContents = MasterFramework:VerticalStack(contents, MasterFramework:AutoScalingDimension(8), 0)
 
     local dialogBody = MasterFramework:VerticalStack( -- TODO: Handling for when there's no  contents?
         { dialogTitle, editableContents, optionsStack },
-        MasterFramework:Dimension(8),
+        MasterFramework:AutoScalingDimension(8),
         0
     )
 
     dialog = MasterFramework:PrimaryFrame(
-        MasterFramework:MarginAroundRect(
-            MasterFramework:FrameOfReference(
-                0.5, 0.5,
-                MasterFramework:MarginAroundRect(
-                    dialogBody,
-                    MasterFramework:Dimension(20),
-                    MasterFramework:Dimension(20),
-                    MasterFramework:Dimension(20),
-                    MasterFramework:Dimension(20),
-                    { MasterFramework.FlowUIExtensions:Element() },
-                    MasterFramework:Dimension(5),
-                    true
-                )
+        MasterFramework:Background(
+            MasterFramework:MarginAroundRect(
+                MasterFramework:FrameOfReference(
+                    0.5, 0.5,
+                    MasterFramework:Background(
+                        MasterFramework:MarginAroundRect(
+                            dialogBody,
+                            MasterFramework:AutoScalingDimension(20),
+                            MasterFramework:AutoScalingDimension(20),
+                            MasterFramework:AutoScalingDimension(20),
+                            MasterFramework:AutoScalingDimension(20)
+                        ),
+                        { MasterFramework.FlowUIExtensions:Element() },
+                        MasterFramework:AutoScalingDimension(5)
+                    )
+                ),
+                MasterFramework:AutoScalingDimension(0),
+                MasterFramework:AutoScalingDimension(0),
+                MasterFramework:AutoScalingDimension(0),
+                MasterFramework:AutoScalingDimension(0)
             ),
-            MasterFramework:Dimension(0),
-            MasterFramework:Dimension(0),
-            MasterFramework:Dimension(0),
-            MasterFramework:Dimension(0),
             { MasterFramework:Color(0, 0, 0, 0.7) },
-            MasterFramework:Dimension(5),
-            true
+            MasterFramework:AutoScalingDimension(5)
         )
     )
 
@@ -224,10 +227,12 @@ end
 
 local keybindsFileName = "uikeys.txt"
 local function save()
-    Spring.SendCommands("keysave")
-    os.rename("uikeys.tmp", keybindsFileName)
+    Spring.SendCommands("keysave " .. keybindsFileName)
+    -- os.rename("uikeys.tmp", keybindsFileName)
 end
 
+
+-- returns { [1] = { mods = {}, key = <number }, ... }
 local function parse(rawString)
     local mods = {
         any = "any",
@@ -301,19 +306,50 @@ local function keychainFilterMatch(parsedFilter, parsedBinding)
             end
         end
 
-        local keyPresent
-        for _, bind in ipairs(parsedBinding) do
-            if bind.key == filterBind.key or Spring.GetKeyFromScanSymbol(bind.key) == filterBind.key then
-                keyPresent = true
-            else
+        if filterBind.key then
+            local keyPresent
+            for _, bind in ipairs(parsedBinding) do
+                if bind.key == filterBind.key or Spring.GetKeyFromScanSymbol(bind.key) == filterBind.key then
+                    keyPresent = true
+                else
+                end
             end
-        end
-        if not keyPresent then
-            return false
+            if not keyPresent then
+                return false
+            end
         end
     end
     
     return true
+end
+
+local function nxor(lhs, rhs)
+    return (lhs and rhs) or (not lhs and not rhs)
+end
+
+local function refreshKeyboard()
+    for code, uiKey in pairs(keyboard.uiKeys) do
+        if not (uiKey._keyCode == 0x130 --[[shift]] or uiKey._keyCode == 0x132 --[[ctrl]] or uiKey._keyCode == 0x134 --[[alt]] or uiKey._keyCode == 0x136 --[[meta]] or uiKey._keyCode == 0x20 --[[space/meta]]) then
+            uiKey:SetPressed(false)
+        end
+    end
+
+    for _, binding in ipairs(cachedKeybindings) do
+        local keychain = parse(binding.boundWith)
+        -- Executive decision: don't worry about multi-key combos
+        if #keychain == 1 then
+            local bind = keychain[1]
+            if nxor(bind.mods.alt, modFilter.alt) and nxor(bind.mods.shift, modFilter.shift) and nxor(bind.mods.ctrl, modFilter.ctrl) and nxor(bind.mods.meta, modFilter.meta) then
+                local code = Spring.GetKeyCode(bind.key) or Spring.GetKeyCode(Spring.GetKeyFromScanSymbol(bind.key))
+                if code then
+                    local uiKey = keyboard.uiKeys[code]
+                    if uiKey and not (uiKey._keyCode == 0x130 --[[shift]] or uiKey._keyCode == 0x132 --[[ctrl]] or uiKey._keyCode == 0x134 --[[alt]] or uiKey._keyCode == 0x136 --[[meta]] or uiKey._keyCode == 0x20 --[[space/meta]]) then
+                        uiKey:SetPressed(true)
+                    end
+                end
+            end
+        end
+    end
 end
 
 local function refreshBindings()
@@ -340,22 +376,26 @@ local function refreshBindings()
         end
     end)
 
+    cachedKeybindings = keybindings
+    refreshKeyboard()
+
     for _, _categoryElements in pairs(categoryElements) do
-        _categoryElements.members = {}
+        _categoryElements:SetMembers({})
     end
 
     for _, binding in ipairs(keybindings) do
         local categoryName = commandToCategory[binding.command] or "Other"
         local buttonTitle = "\255\200\200\200Command: \255\255\255\255" .. binding.command .. ((binding.extra == "") and "" or (" " .. binding.extra)) .. "\255\200\200\200, boundWith: \255\255\255\255" .. binding.boundWith
 
-        table.insert(categoryElements[categoryName].members, MasterFramework:RightClickMenuAnchor(
+        local categoryMembers = categoryElements[categoryName]:GetMembers()
+
+        table.insert(categoryMembers, MasterFramework:RightClickMenuAnchor(
             MasterFramework:Button(
                 MasterFramework:WrappingText(buttonTitle),
                 function()
                     currentCommand = binding.command
                     if binding.extra ~= "" then
                         currentAction = binding.command .. " " .. binding.extra
-                        Spring.Echo("\"" .. binding.extra .. "\"")
                     else
                         currentAction = binding.command
                     end
@@ -364,7 +404,9 @@ local function refreshBindings()
 
                     keychainDialog.dialog_keybindEntry.text:SetString(binding.boundWith)
                     keychainDialog.dialog_actionEntry.text:SetString(currentAction)
-                    keychainDialog.dialog_body.members[4] = nil
+                    local keychainDialogMembers = keychainDialog.dialog_body:GetMembers()
+                    keychainDialogMembers[4] = nil
+                    keychainDialog.dialog_body:SetMembers(keychainDialogMembers)
 
                     keychainDialog:PresentAbove(key)
                 end
@@ -387,13 +429,15 @@ local function refreshBindings()
             },
             "Binding: " .. binding.boundWith .. " " .. binding.command .. " " .. binding.extra 
         ))
+
+        categoryElements[categoryName]:SetMembers(categoryMembers)
     end
 
     for categoryName, categoryDisclosure in pairs(categoryDisclosures) do
-        categoryDisclosure.disclosure_titleText:SetString(categoryName .. " (" .. #categoryElements[categoryName].members .. ")")
+        categoryDisclosure.disclosure_titleText:SetString(categoryName .. " (" .. #categoryElements[categoryName]:GetMembers() .. ")")
     end
 
-    keybindInterfaceStack.members = categoryDisclosureArrayWithElements()
+    keybindInterfaceStack:SetMembers(categoryDisclosureArrayWithElements())
 
     local reloadableWidgets = {'buildmenu', 'ordermenu', 'keybinds'}
 
@@ -418,7 +462,7 @@ local function TakeAvailableHeight(body)
             cachedAvailableHeight = math.max(availableHeight, height)
             return width, cachedAvailableHeight
         end,
-        Draw = function(_, x, y) body:Draw(x, y + cachedAvailableHeight - cachedHeight) end
+        Position = function(_, x, y) body:Position(x, y + cachedAvailableHeight - cachedHeight) end
     }
 end
 local function TakeAvailableWidth(body)
@@ -427,7 +471,7 @@ local function TakeAvailableWidth(body)
             local _, height = body:Layout(availableWidth, availableHeight)
             return availableWidth, height
         end,
-        Draw = function(_, x, y) body:Draw(x, y) end
+        Position = function(_, x, y) body:Position(x, y) end
     }
 end
 
@@ -436,29 +480,24 @@ local function Disclosure(title, disclosableView)
     local overall
     local wrappedDisclosableView = MasterFramework:MarginAroundRect(
         disclosableView,
-        MasterFramework:Dimension(8),
-        MasterFramework:Dimension(0),
-        MasterFramework:Dimension(0),
-        MasterFramework:Dimension(0)
+        MasterFramework:AutoScalingDimension(8),
+        MasterFramework:AutoScalingDimension(0),
+        MasterFramework:AutoScalingDimension(0),
+        MasterFramework:AutoScalingDimension(0)
     )
 
     local titleText = MasterFramework:Text(title)
-    overall = MasterFramework:VerticalStack(
-        {
-            MasterFramework:Button(
-                titleText,
-                function() overall:SetBodyVisible(not bodyVisible) end
-            )
-        },
-        MasterFramework:Dimension(0),
-        0
+    local button = MasterFramework:Button(
+        titleText,
+        function() overall:SetBodyVisible(not bodyVisible) end
     )
+    overall = MasterFramework:VerticalStack({ button }, MasterFramework:AutoScalingDimension(0), 0)
 
     function overall:SetBodyVisible(visible)
         if visible then
-            overall.members[2] = wrappedDisclosableView
+            overall:SetMembers({ button, wrappedDisclosableView })
         else
-            overall.members[2] = nil
+            overall:SetMembers({ button })
         end
         bodyVisible = visible
     end
@@ -473,7 +512,7 @@ local function KeybindEntry(...) -- TODO: Modifier-only bind support!
 
     function entry:TextInput() end
     function entry:KeyPress(key, mods, isRepeat, label, utf32char, scanCode, actionList)
-        if isRepeat or keyCodes[key].type == keyCodeTypes.modifier then return end
+        if isRepeat then return end
 
         newKeybind = ""
         if mods.ctrl then
@@ -489,23 +528,29 @@ local function KeybindEntry(...) -- TODO: Modifier-only bind support!
             newKeybind = newKeybind .. "Meta+"
         end
 
-        local keyName = keyCodeToName[key]
-        newKeybind = newKeybind .. keyName
+        if keyCodes[key].type == keyCodeTypes.modifier then
+            newKeybind = newKeybind:sub(1, newKeybind:len() - 1)
+        else
+            local keyName = keyCodeToName[key]
+            newKeybind = newKeybind .. keyName
+        end
 
         self.text:SetString(newKeybind)
 
         local conflicts = Spring_GetKeyBindings(newKeybind)
 
+        local dialogMembers = keychainDialog.dialog_body:GetMembers()
         if conflicts and #conflicts > 0 then
-            keychainDialog.dialog_body.members[4] = MasterFramework:Text(
+            dialogMembers[4] = MasterFramework:Text(
                 table.reduce(conflicts, #conflicts .. " Conflict(s)", function(currentValue, nextConflict)
                     return currentValue .. ", " .. nextConflict.command .. " " .. nextConflict.extra .. " (" .. nextConflict.boundWith .. ")"
                 end),
                 MasterFramework:Color(1, 0.1, 0.1, 1)
             )
         else
-            keychainDialog.dialog_body.members[4] = nil
+            dialogMembers[4] = nil
         end
+        keychainDialog.dialogBody:SetMembers(dialogMembers)
     end
 
     return entry
@@ -730,7 +775,7 @@ local function PresetsDialog()
                 "Preset \"" .. preset.name .. "\""
             )
         end),
-        MasterFramework:Dimension(0),
+        MasterFramework:AutoScalingDimension(0),
         0.5
     ) 
 
@@ -801,9 +846,20 @@ end
 ------------------------------------------------------------------------------------------------------------
 
 function widget:Initialize()
-    MasterFramework = WG.MasterFramework[requiredFrameworkVersion]
+    MasterFramework = WG["MasterFramework " .. requiredFrameworkVersion]
     if not MasterFramework then
-        error("[Keybind Editor] MasterFramework " .. requiredFrameworkVersion .. " not found!")
+        error("MasterFramework " .. requiredFrameworkVersion .. " not found!")
+    end
+
+    table = MasterFramework.table
+
+    local categoryNames = table.mapToArray(categories, function(key, _) return key end)
+    table.sort(categoryNames)
+
+    categoryDisclosureArrayWithElements = function()
+        return table.imap(table.ifilter(categoryNames, function(_, categoryName) return #categoryElements[categoryName]:GetMembers() > 0 end), function(_, categoryName)
+            return categoryDisclosures[categoryName]
+        end)
     end
 
     -- first-time setup
@@ -855,7 +911,7 @@ function widget:Initialize()
     keychainDialog = KeychainDialog()
 
     categoryElements = table.imapToTable(categoryNames, function(_, categoryName)
-        return categoryName, MasterFramework:VerticalStack({}, MasterFramework:Dimension(8), 0)
+        return categoryName, MasterFramework:VerticalStack({}, MasterFramework:AutoScalingDimension(8), 0)
     end)
 
     categoryDisclosures = table.imapToTable(categoryNames, function(_, categoryName)
@@ -864,7 +920,7 @@ function widget:Initialize()
 
     keybindInterfaceStack = MasterFramework:VerticalStack(
         categoryDisclosureArrayWithElements(),
-        MasterFramework:Dimension(0),
+        MasterFramework:AutoScalingDimension(0),
         0
     )
 
@@ -879,53 +935,123 @@ function widget:Initialize()
             bindFilterField,
             MasterFramework:Button(MasterFramework:Text("Clear"), function() commandFilterField.text:SetString(""); bindFilterField.text:SetString("") end)
         },
-        MasterFramework:Dimension(8),
+        MasterFramework:AutoScalingDimension(8),
         0.5
     )
 
+    local function uiKeyAction(uiKey)
+        if uiKey._keyCode == 0x130 --[[shift]] or uiKey._keyCode == 0x132 --[[ctrl]] or uiKey._keyCode == 0x134 --[[alt]] or uiKey._keyCode == 0x136 --[[meta]] or uiKey._keyCode == 0x20 --[[space/meta]] then
+            local modName = keyCodes[uiKey._keyCode].compressedName:lower()
+            modFilter[modName] = not modFilter[modName]
+            uiKey:SetPressed(modFilter[modName])
+
+            refreshKeyboard()
+        else
+            -- todo: present menu of binds to edit
+
+            -- keychainDialog.dialog_keybindEntry.text:SetString("")
+            -- keychainDialog.dialog_actionEntry.text:SetString("")
+            -- keychainDialog.dialog_body.members[4] = nil
+
+            -- keychainDialog:PresentAbove(key)
+        end
+    end
+
+    local keyboardTooltip = MasterFramework:Text("")
+
+    local function uiKeyHoverAction(uiKey, isOver)
+        if uiKey._keyCode == 0x130 --[[shift]] or uiKey._keyCode == 0x132 --[[ctrl]] or uiKey._keyCode == 0x134 --[[alt]] or uiKey._keyCode == 0x136 --[[meta]] or uiKey._keyCode == 0x20 --[[space/meta]] then
+            return 
+        end
+
+        if not isOver then
+            keyboardTooltip:SetString("")
+            return
+        end
+
+        local keyset = ""
+        if modFilter.ctrl then
+            keyset = keyset .. "Ctrl+"
+        end
+        if modFilter.shift then
+            keyset = keyset .. "Shift+"
+        end
+        if modFilter.alt then
+            keyset = keyset .. "Alt+"
+        end
+        if modFilter.meta then
+            keyset = keyset .. "Meta+"
+        end
+
+        local keyName = keyCodeToName[uiKey._keyCode]
+        if not keyName then return end
+        keyset = keyset .. keyName
+
+        keyboardTooltip:SetString(table.concat(table.imap(Spring.GetKeyBindings(keyset), function(_, keyBinding)
+            return keyBinding.boundWith .. " " .. keyBinding.command .. " " .. keyBinding.extra
+        end), ", "))
+    end
+    
+    keyboard = WG.MasterGUIKeyboard()
+    for code, uikey in pairs(keyboard.uiKeys) do
+        uikey._uiKey_action = uiKeyAction
+        uikey._uiKey_hoverAction = uiKeyHoverAction
+    end
+
     refreshBindings()
+
+    -- keyboard.
 
     local resizableFrame = MasterFramework:ResizableMovableFrame(
         "Keybind Editor",
         MasterFramework:PrimaryFrame(
-            MasterFramework:MarginAroundRect(
-                -- MasterFramework:Rect(MasterFramework:Dimension(100), MasterFramework:Dimension(100)),
-                MasterFramework:VerticalHungryStack(
-                    searchBar,
-                    TakeAvailableHeight(MasterFramework:VerticalScrollContainer(keybindInterfaceStack)),
-                    MasterFramework:HorizontalStack(
-                        {
-                            MasterFramework:Button(
-                                MasterFramework:Text("+"),
-                                function()
-                                    keychainDialog.dialog_keybindEntry.text:SetString("")
-                                    keychainDialog.dialog_actionEntry.text:SetString("")
-                                    keychainDialog.dialog_body.members[4] = nil
-        
-                                    keychainDialog:PresentAbove(key)
-                                end
-                            ),
-                            MasterFramework:Button(
-                                MasterFramework:Text("Presets"),
-                                function()
-                                    local presetsDialog = PresetsDialog()
-                                    presetsDialog:PresentAbove(key)
-                                end
-                            )
-                        }, 
-                        MasterFramework:Dimension(8), 
+            MasterFramework:Background(
+                MasterFramework:MarginAroundRect(
+                    MasterFramework:VerticalHungryStack(
+                        searchBar,
+                        TakeAvailableHeight(MasterFramework:VerticalScrollContainer(keybindInterfaceStack)),
+                        MasterFramework:VerticalStack(
+                            {
+                                MasterFramework:HorizontalStack(
+                                    {
+                                        MasterFramework:Button(
+                                            MasterFramework:Text("+"),
+                                            function()
+                                                keychainDialog.dialog_keybindEntry.text:SetString("")
+                                                keychainDialog.dialog_actionEntry.text:SetString("")
+                                                local keychainDialogMembers = keychainDialog.dialog_body:GetMembers()
+                                                keychainDialogMembers[4] = nil
+                                                keychainDialog.dialog_body:SetMembers(keychainDialogMembers)
+                    
+                                                keychainDialog:PresentAbove(key)
+                                            end
+                                        ),
+                                        MasterFramework:Button(
+                                            MasterFramework:Text("Presets"),
+                                            function()
+                                                local presetsDialog = PresetsDialog()
+                                                presetsDialog:PresentAbove(key)
+                                            end
+                                        ),
+                                        keyboardTooltip
+                                    }, 
+                                    MasterFramework:AutoScalingDimension(8),
+                                    0
+                                ),
+                                keyboard
+                            },
+                            MasterFramework:AutoScalingDimension(8),
+                            0
+                        ),
                         0
                     ),
-                    0
+                    MasterFramework:AutoScalingDimension(20),
+                    MasterFramework:AutoScalingDimension(20),
+                    MasterFramework:AutoScalingDimension(20),
+                    MasterFramework:AutoScalingDimension(20)
                 ),
-                MasterFramework:Dimension(20),
-                MasterFramework:Dimension(20),
-                MasterFramework:Dimension(20),
-                MasterFramework:Dimension(20),
                 { MasterFramework.FlowUIExtensions:Element() },
-                MasterFramework:Dimension(5),
-                true
-                -- false
+                MasterFramework:AutoScalingDimension(5)
             )
         ),
         MasterFramework.viewportWidth * 0.2, MasterFramework.viewportHeight * 0.9,
@@ -937,6 +1063,18 @@ function widget:Initialize()
 end
 
 function widget:Update()
+    -- for key, enabled in pairs(modFilter) do
+    --     if lastUpdateModFilter[key] ~= enabled then
+    --         -- update keyboard showing
+
+    --         lastUpdateModFilter.alt = modFilter.alt
+    --         lastUpdateModFilter.shift = modFilter.shift
+    --         lastUpdateModFilter.ctrl = modFilter.ctrl
+    --         lastUpdateModFilter.meta = modFilter.meta
+    --         break
+    --     end
+    -- end
+
     if keybindFilter ~= bindFilterField.text:GetRawString() or commandFilter ~= commandFilterField.text:GetRawString() then
         keybindFilter = bindFilterField.text:GetRawString()
         commandFilter = commandFilterField.text:GetRawString()
