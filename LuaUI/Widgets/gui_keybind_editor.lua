@@ -19,6 +19,18 @@ local requiredFrameworkVersion = "Dev"
 local key
 
 ------------------------------------------------------------------------------------------------------------
+-- Patterns
+------------------------------------------------------------------------------------------------------------
+
+local pattern_keychainComponent = "[^%+,]+"
+local pattern_commandFromAction = "[^%s]+"
+
+local pattern_presetNameChar = "[%w_%-]"
+
+local pattern_dirFromTxtPath = (Platform.osFamily == "Windows") and "([%w_%-%.\\]+\\)[%w_%-]+%.txt" or "([%w_%-%./]+/)[%w_%-]+%.txt"
+local pattern_fileNameWithoutSuffixFromTxtPath = (Platform.osFamily == "Windows") and "[%w_%-%.\\]+\\([%w_%-]+)%.txt" or "[%w_%-%./]+/([%w_%-]+)%.txt"
+
+------------------------------------------------------------------------------------------------------------
 -- Imports
 ------------------------------------------------------------------------------------------------------------
 
@@ -253,7 +265,7 @@ local function parse(rawString)
     local searchIndex = 1
     while searchIndex <= rawString:len() do
 
-        local startIndex, endIndex = rawString:find("[^%+,]+", searchIndex)
+        local startIndex, endIndex = rawString:find(pattern_keychainComponent, searchIndex)
 
         if startIndex ~= searchIndex then -- It's just a bind for "+" or ",". Covers the nil case of startIndex, as searchIndex will never be nil.
             currentBind.key = rawString:sub(searchIndex, searchIndex):lower()
@@ -578,7 +590,7 @@ local function KeychainDialog()
                     refreshBindings()
                     save()
 
-                    local newCommand = newAction:sub(newAction:find("[^%s]+")) or newAction -- TODO: strip starting spaces
+                    local newCommand = newAction:sub(newAction:find(pattern_commandFromAction)) or newAction -- TODO: strip starting spaces
                     categoryDisclosures[commandToCategory[newCommand] or "Other"]:SetBodyVisible(true)
                 end
             },
@@ -612,7 +624,7 @@ local function keybindConfigs(fileNames, areImmutable)
     debugInfo[areImmutable] = fileNames
     return table.imap(fileNames, function(_, fileName)
         return {
-            name = fileName:match("[%w_%-%./]+/([%w_%-]+)%.txt"),
+            name = fileName:match(pattern_fileNameWithoutSuffixFromTxtPath),
             path = fileName,
             isImmutable = areImmutable
         }
@@ -624,7 +636,7 @@ local function writeStringToFile(string, newLocation, overwrite)
         return false
     end
 
-    local dir = newLocation:match("([%w_%-%./]+/)[%w_%-]+%.txt")
+    local dir = newLocation:match(pattern_dirFromTxtPath)
     if dir then
         Spring.CreateDir(dir)
     end
@@ -645,7 +657,7 @@ local function PresetNameEntry()
     function entry:editReturn() end
     entry._TextInput = entry.TextInput
     function entry:TextInput(char)
-        if char:find("[%w_%-]") then
+        if char:find(pattern_presetNameChar) then
             entry:_TextInput(char)
         end
     end
